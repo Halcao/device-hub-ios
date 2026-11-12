@@ -148,6 +148,38 @@ struct RemoteFloatingControlsLayoutTests {
         #expect(clamped == CGPoint(x: 42, y: 500))
     }
 
+    @Test("Taps route to the control whose third they land in")
+    func tapsRouteToControlThirds() {
+        // Icon centers for a 170 pt cluster with the current padding
+        // and spacing all sit inside their own thirds.
+        #expect(
+            RemoteFloatingControlsLayout.slot(centerY: 0, clusterHeight: 170)
+                == .home
+        )
+        #expect(
+            RemoteFloatingControlsLayout.slot(centerY: 33, clusterHeight: 170)
+                == .home
+        )
+        #expect(
+            RemoteFloatingControlsLayout.slot(centerY: 85, clusterHeight: 170)
+                == .appSwitcher
+        )
+        #expect(
+            RemoteFloatingControlsLayout.slot(centerY: 137, clusterHeight: 170)
+                == .lock
+        )
+        #expect(
+            RemoteFloatingControlsLayout.slot(
+                centerY: 169,
+                clusterHeight: 170
+            ) == .lock
+        )
+        #expect(
+            RemoteFloatingControlsLayout.slot(centerY: 85, clusterHeight: 0)
+                == .appSwitcher
+        )
+    }
+
     @Test("A canvas smaller than the cluster falls back to its middle")
     func canvasSmallerThanClusterFallsBackToMiddle() {
         let tiny = CGSize(width: 100, height: 100)

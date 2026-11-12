@@ -6,6 +6,13 @@ enum RemoteFloatingControlsEdge: String, CaseIterable, Equatable {
     case trailing
 }
 
+/// The target control a tap in the cluster activates.
+enum RemoteFloatingControlSlot: Equatable {
+    case home
+    case appSwitcher
+    case lock
+}
+
 /// Pure geometry for the draggable floating control cluster.
 enum RemoteFloatingControlsLayout {
     /// Space between the cluster and the edge it rests on.
@@ -90,6 +97,26 @@ enum RemoteFloatingControlsLayout {
         )
     }
 
+    /// The control a cluster-local tap activates. The three icons are
+    /// equal-height slices, so plain thirds track them without
+    /// hard-coding the padding and spacing constants.
+    static func slot(
+        centerY: CGFloat,
+        clusterHeight: CGFloat
+    ) -> RemoteFloatingControlSlot {
+        guard clusterHeight > 0 else {
+            return .appSwitcher
+        }
+        let slice = centerY / clusterHeight
+        if slice < 1.0 / 3.0 {
+            return .home
+        }
+        if slice < 2.0 / 3.0 {
+            return .appSwitcher
+        }
+        return .lock
+    }
+
     /// Horizontal clamp that keeps the cluster inside the canvas with its
     /// edge inset, falling back to the middle when it cannot fit.
     private static func clampedX(
@@ -129,6 +156,11 @@ enum RemoteFloatingControlsLayout {
 /// drag it: on release it springs to the nearest edge at the exact height
 /// it was dropped, and the placement survives relaunches.
 struct RemoteFloatingControls: View {
+    /// How long a touch must hold before the cluster can be dragged.
+    private static let holdDuration: TimeInterval = 0.35
+    /// How far a touch may drift during the hold and still tap.
+    private static let tapDriftTolerance: CGFloat = 20
+
     let acceptsInput: Bool
     let homeButtonTapped: () -> Void
     let appSwitcherButtonTapped: () -> Void
@@ -144,10 +176,15 @@ struct RemoteFloatingControls: View {
     @State private var isDragging = false
     @State private var snapTargetEdge: RemoteFloatingControlsEdge?
     @State private var clusterSize = CGSize.zero
+    @State private var holdCheckTask: Task<Void, Never>?
+    @State private var touchStartedAt: Date?
+    @State private var touchDrift = CGSize.zero
+    @State private var touchAborted = false
 
     var body: some View {
         GeometryReader { proxy in
             controls
+                .gesture(touchGesture(canvasSize: proxy.size))
                 .position(
                     liveCenter ?? restingCenter(canvasSize: proxy.size)
                 )
@@ -156,10 +193,9 @@ struct RemoteFloatingControls: View {
                 } action: {
                     clusterSize = $0
                 }
-                // Buttons win plain container gestures, so the
-                // hold-to-drag sequence must outrank them. It still fails
-                // fast on a quick tap, which keeps the buttons responsive.
-                .highPriorityGesture(dragGesture(canvasSize: proxy.size))
+                .onDisappear {
+                    holdCheckTask?.cancel()
+                }
         }
     }
 
@@ -175,6 +211,10 @@ struct RemoteFloatingControls: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 6)
+        // The whole capsule is one hit target. With only the icons
+        // testable, presses on the padding and gaps fall through to the
+        // mirrored screen behind the cluster.
+        .contentShape(.capsule)
         // No opaque fill behind the glass: a background layered inside
         // the effect hides the refraction and highlights that make it
         // read as Liquid Glass.
@@ -189,45 +229,145 @@ struct RemoteFloatingControls: View {
         .accessibilityIdentifier("remote-floating-controls")
     }
 
+    /// Plain icons, not buttons: a button wins touches from any
+    /// container gesture, which is why hold-to-drag never fired. One
+    /// gesture on the capsule owns every touch and routes quick taps
+    /// itself; VoiceOver keeps direct actions.
     private func control(
         _ label: String,
         systemImage: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
-                .frame(width: 42, height: 42)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(!acceptsInput)
-        .accessibilityLabel(label)
+        Image(systemName: systemImage)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
+            .frame(width: 42, height: 42)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                guard acceptsInput else {
+                    return
+                }
+                action()
+            }
     }
 
-    private func dragGesture(canvasSize: CGSize) -> some Gesture {
-        // A generous maximumDistance keeps a slightly drifting finger
-        // from aborting the hold before the drag can start.
-        LongPressGesture(minimumDuration: 0.35, maximumDistance: 50)
-            .sequenced(before: DragGesture())
+    private func touchGesture(canvasSize: CGSize) -> some Gesture {
+        // minimumDistance 0 claims the touch immediately, so a
+        // stationary hold can be timed here instead of depending on a
+        // LongPressGesture that never wins recognition.
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                switch value {
-                case .first(true):
-                    beginDrag(canvasSize: canvasSize)
-                case let .second(true, drag?):
-                    updateDrag(
-                        translation: drag.translation,
-                        canvasSize: canvasSize
-                    )
-                default:
-                    break
-                }
+                touchChanged(value, canvasSize: canvasSize)
             }
-            .onEnded { _ in
-                endDrag(canvasSize: canvasSize)
+            .onEnded { value in
+                touchEnded(value, canvasSize: canvasSize)
             }
+    }
+
+    private func touchChanged(
+        _ value: DragGesture.Value,
+        canvasSize: CGSize
+    ) {
+        if isStaleTouch(now: value.time) {
+            // A previous gesture never ended; treat this as a new one.
+            touchStartedAt = nil
+            touchAborted = false
+        }
+        if touchStartedAt == nil {
+            touchStartedAt = value.time
+            touchDrift = value.translation
+            scheduleHoldCheck(canvasSize: canvasSize)
+            return
+        }
+        advanceTouch(value, canvasSize: canvasSize)
+    }
+
+    private func advanceTouch(
+        _ value: DragGesture.Value,
+        canvasSize: CGSize
+    ) {
+        guard !touchAborted else {
+            return
+        }
+        if isDragging {
+            updateDrag(
+                translation: value.translation,
+                canvasSize: canvasSize
+            )
+            return
+        }
+        touchDrift = value.translation
+        let drift =
+            abs(value.translation.width) + abs(value.translation.height)
+        if drift > Self.tapDriftTolerance {
+            // Too much movement too early: neither a tap nor a hold.
+            touchAborted = true
+            holdCheckTask?.cancel()
+        }
+    }
+
+    /// A touch record older than a second that never became a drag is
+    /// left over from a gesture that never ended.
+    private func isStaleTouch(now: Date) -> Bool {
+        guard let touchStartedAt, !isDragging else {
+            return false
+        }
+        return now.timeIntervalSince(touchStartedAt) > 1
+    }
+
+    private func scheduleHoldCheck(canvasSize: CGSize) {
+        holdCheckTask?.cancel()
+        holdCheckTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.holdDuration))
+            guard !Task.isCancelled else {
+                return
+            }
+            guard touchStartedAt != nil, !touchAborted, !isDragging else {
+                return
+            }
+            beginDrag(canvasSize: canvasSize)
+        }
+    }
+
+    private func touchEnded(
+        _ value: DragGesture.Value,
+        canvasSize: CGSize
+    ) {
+        holdCheckTask?.cancel()
+        holdCheckTask = nil
+        defer {
+            touchStartedAt = nil
+            touchDrift = .zero
+            touchAborted = false
+        }
+
+        if isDragging {
+            endDrag(canvasSize: canvasSize)
+            return
+        }
+
+        // A quick, still touch is a tap; a slow release was a hold that
+        // never became a drag and activates nothing.
+        guard !touchAborted, let touchStartedAt else {
+            return
+        }
+        let hold = value.time.timeIntervalSince(touchStartedAt)
+        guard hold < Self.holdDuration, acceptsInput else {
+            return
+        }
+        switch RemoteFloatingControlsLayout.slot(
+            centerY: value.startLocation.y,
+            clusterHeight: clusterSize.height
+        ) {
+        case .home:
+            homeButtonTapped()
+        case .appSwitcher:
+            appSwitcherButtonTapped()
+        case .lock:
+            lockButtonTapped()
+        }
     }
 
     private var storedEdge: RemoteFloatingControlsEdge {
@@ -248,11 +388,19 @@ struct RemoteFloatingControls: View {
             return
         }
         let anchor = restingCenter(canvasSize: canvasSize)
+        let initial = RemoteFloatingControlsLayout.clampedCenter(
+            rawCenter: CGPoint(
+                x: anchor.x + touchDrift.width,
+                y: anchor.y + touchDrift.height
+            ),
+            canvasSize: canvasSize,
+            clusterSize: clusterSize
+        )
         isDragging = true
         dragAnchor = anchor
-        liveCenter = anchor
+        liveCenter = initial
         snapTargetEdge = RemoteFloatingControlsLayout.nearestEdge(
-            centerX: anchor.x,
+            centerX: initial.x,
             canvasWidth: canvasSize.width
         )
         DeviceHubHaptics.hardwareControl()
