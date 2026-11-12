@@ -9,6 +9,13 @@ extension RemoteSessionFeature {
         action: Action
     ) -> Effect<Action> {
         switch action {
+        case let .connectAttemptTimedOut(attemptID, deviceID):
+            return handleConnectAttemptTimeout(
+                state: &state,
+                attemptID: attemptID,
+                deviceID: deviceID
+            )
+
         case let .connectionResponse(attemptID, deviceID, result):
             return handleConnectionResponse(
                 state: &state,
@@ -36,7 +43,13 @@ extension RemoteSessionFeature {
             state.session = session
             return .concatenate(
                 closeSessionEffect(session: session),
-                cancelSessionEffects()
+                cancelSessionEffects(),
+                scheduleReconnectEffect(
+                    attemptID: attemptID,
+                    delay: RemoteSessionFeature.reconnectDelay(
+                        afterAttempts: state.automaticReconnectAttempts
+                    )
+                )
             )
 
         case let .sessionStreamFailed(attemptID, sessionID, error):
@@ -53,6 +66,18 @@ extension RemoteSessionFeature {
             state.activeContactIDs.removeAll()
             state.remediation = DeviceHubRemediation(error: error)
             state.session = session
+            if error.retryability == .automatic {
+                return .concatenate(
+                    closeSessionEffect(session: session),
+                    cancelSessionEffects(),
+                    scheduleReconnectEffect(
+                        attemptID: attemptID,
+                        delay: RemoteSessionFeature.reconnectDelay(
+                            afterAttempts: state.automaticReconnectAttempts
+                        )
+                    )
+                )
+            }
             return .concatenate(
                 closeSessionEffect(session: session),
                 cancelSessionEffects()
@@ -111,7 +136,18 @@ extension RemoteSessionFeature {
             session.sessionID = nil
             state.remediation = DeviceHubRemediation(error: error)
             state.session = session
-            return .none
+            if error.retryability == .automatic {
+                return .concatenate(
+                    .cancel(id: CancelID.connectTimeout),
+                    scheduleReconnectEffect(
+                        attemptID: attemptID,
+                        delay: RemoteSessionFeature.reconnectDelay(
+                            afterAttempts: state.automaticReconnectAttempts
+                        )
+                    )
+                )
+            }
+            return .cancel(id: CancelID.connectTimeout)
 
         case let .success(openedSession):
             DeviceHubFeatureTrace.emit("connection_opened")
@@ -121,11 +157,47 @@ extension RemoteSessionFeature {
             session.sessionID = openedSession.id
             state.remediation = nil
             state.session = session
-            return observe(
-                attemptID: attemptID,
-                session: openedSession
+            return .merge(
+                .cancel(id: CancelID.connectTimeout),
+                observe(
+                    attemptID: attemptID,
+                    session: openedSession
+                )
             )
         }
+    }
+
+    private func handleConnectAttemptTimeout(
+        state: inout State,
+        attemptID: UUID,
+        deviceID: DeviceID
+    ) -> Effect<Action> {
+        guard var session = state.session,
+              session.attemptID == attemptID,
+              session.device.id == deviceID,
+              session.sessionID == nil,
+              session.remoteState == nil,
+              session.connectionError == nil
+        else {
+            return .none
+        }
+        DeviceHubFeatureTrace.emit("connect_attempt_timed_out")
+        session.connectionError = .connectionLost
+        state.activeContactIDs.removeAll()
+        state.remediation = DeviceHubRemediation(error: .connectionLost)
+        state.session = session
+        return .concatenate(
+            .merge(
+                .cancel(id: CancelID.connect),
+                abandonConnectAttemptEffect(attemptID: attemptID)
+            ),
+            scheduleReconnectEffect(
+                attemptID: attemptID,
+                delay: RemoteSessionFeature.reconnectDelay(
+                    afterAttempts: state.automaticReconnectAttempts
+                )
+            )
+        )
     }
 
     private func handleSessionUpdate(
@@ -162,9 +234,21 @@ extension RemoteSessionFeature {
 
         if update.event.endsSession {
             state.activeContactIDs.removeAll()
-            return .concatenate(
+            let closeAndCancel = Effect<Action>.concatenate(
                 closeSessionEffect(session: session),
                 cancelSessionEffects()
+            )
+            guard update.event.isAutomaticallyRetryableEnd else {
+                return closeAndCancel
+            }
+            return .concatenate(
+                closeAndCancel,
+                scheduleReconnectEffect(
+                    attemptID: attemptID,
+                    delay: RemoteSessionFeature.reconnectDelay(
+                        afterAttempts: state.automaticReconnectAttempts
+                    )
+                )
             )
         }
         guard wasAcceptingInput, !session.acceptsInput else {
@@ -217,6 +301,15 @@ extension RemoteSessionFeature {
 }
 
 private extension DeviceSessionEvent {
+    /// Whether the transport ended the session with a failure the app is
+    /// expected to recover from without user action.
+    var isAutomaticallyRetryableEnd: Bool {
+        guard case let .ended(error?) = self else {
+            return false
+        }
+        return error.retryability == .automatic
+    }
+
     var inputRevocationTraceKind: String {
         switch self {
         case .phaseChanged:

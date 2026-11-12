@@ -139,6 +139,22 @@ public struct DeviceHubView: View {
         NavigationStack {
             remoteSession
         }
+        #if os(iOS)
+        // The screen-edge deferral preference must be applied *outside*
+        // the NavigationStack: SwiftUI stores host preferences like this
+        // on the nearest enclosing hosting controller, and UIKit only
+        // consults the window's root hosting controller. Inside the
+        // stack the preference lands on the stack's internal hosting
+        // controller, where the system never reads it, and the first
+        // bottom swipe would still exit to the home screen.
+        .defersSystemGestures(on: hasLiveFrame ? .bottom : [])
+        #endif
+    }
+
+    /// Whether a remote frame is on screen, matching ``RemoteCanvas``'s own
+    /// content signal so the deferral follows exactly the live mirror.
+    private var hasLiveFrame: Bool {
+        store.session?.frame != nil
     }
 
     private var remoteSession: some View {

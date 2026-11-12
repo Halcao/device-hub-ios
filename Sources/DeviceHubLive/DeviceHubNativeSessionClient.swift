@@ -62,7 +62,15 @@ final class DeviceHubNativeSessionFactory {
         static let live = Self(
             functions: .live,
             makeVideoBridge: { generation in
-                try NativeVideoEventBridge(generation: generation)
+                // The live app rides at the designed ceiling: VideoToolbox
+                // pipeline construction on the first keyframe can stall the
+                // consumer beyond the default one-second burst window under
+                // system compositing load, and a saturated buffer terminates
+                // the whole session.
+                try NativeVideoEventBridge(
+                    generation: generation,
+                    bufferCapacity: NativeVideoEventBridge.maximumBufferCapacity
+                )
             }
         )
     }

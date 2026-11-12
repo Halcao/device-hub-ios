@@ -80,6 +80,9 @@ extension RemoteSessionFeature {
         session.frame = frame
         session.remoteState = remoteState
         state.remediation = nil
+        // A delivered frame proves the reconnect cadence works end to end,
+        // so the backoff restarts from its base delay.
+        state.automaticReconnectAttempts = 0
         state.session = session
         if previousScreen?.kind != .videoFrame,
            frame.metadata.kind == .videoFrame

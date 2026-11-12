@@ -1,6 +1,7 @@
 import DeviceHubClient
 import DeviceHubCore
 import DeviceHubFeature
+import Foundation
 import SwiftUI
 
 struct RemoteCanvas: View {
@@ -10,6 +11,9 @@ struct RemoteCanvas: View {
     let isViewingStopped: Bool
     let presentation: RemoteSessionPresentation?
     let remediation: DeviceHubRemediation?
+    let appSwitcherButtonTapped: () -> Void
+    let homeButtonTapped: () -> Void
+    let lockButtonTapped: () -> Void
     let pairButtonTapped: () -> Void
     let remediationButtonTapped: () -> Void
     let remediationDismissed: () -> Void
@@ -48,6 +52,18 @@ struct RemoteCanvas: View {
                 cancelActiveTouch()
             }
         }
+        #if os(iOS)
+        // The bottom-edge system-gesture deferral that keeps the first
+        // swipe-up inside the app lives on ``DeviceHubView``'s
+        // navigation root: it must be applied outside any NavigationStack
+        // to reach the window's root hosting controller. See the comment
+        // there before moving or duplicating it.
+        .onChange(of: hasScreenContent) { _, hasFrame in
+            RemoteCanvasTrace.emit(
+                "canvas_content_changed has_frame=\(hasFrame)"
+            )
+        }
+        #endif
     }
 
     private var hasScreenContent: Bool {
@@ -146,6 +162,18 @@ struct RemoteCanvas: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Edge gestures still race iPadOS system gestures even with bottom
+        // deferral, so the common target gestures stay available as pinned
+        // buttons on the canvas border.
+        .overlay(alignment: .trailing) {
+            RemoteFloatingControls(
+                acceptsInput: acceptsInput,
+                homeButtonTapped: homeButtonTapped,
+                appSwitcherButtonTapped: appSwitcherButtonTapped,
+                lockButtonTapped: lockButtonTapped
+            )
+            .padding(.trailing, 12)
+        }
         .contentShape(.rect)
         .accessibilityElement()
         .accessibilityLabel(accessibilityLabel)
@@ -278,6 +306,24 @@ enum RemoteInputSurfaceGeometry {
         )
     }
 }
+
+#if os(iOS)
+    /// Emits opt-in, identity-free canvas diagnostics on stdout.
+    enum RemoteCanvasTrace {
+        static func emit(_ message: String) {
+            guard
+                ProcessInfo.processInfo.environment[
+                    "DEVICE_HUB_BOOTSTRAP_TRACE"
+                ] == "1"
+            else {
+                return
+            }
+            FileHandle.standardOutput.write(
+                Data("devicehub.ui \(message)\n".utf8)
+            )
+        }
+    }
+#endif
 
 private struct RemoteInputSurface: View {
     @Binding var touchLedger: RemoteTouchLedger

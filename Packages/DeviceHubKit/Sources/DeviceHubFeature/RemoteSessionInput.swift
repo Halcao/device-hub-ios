@@ -7,6 +7,9 @@ extension RemoteSessionFeature {
         action: Action
     ) -> Effect<Action> {
         switch action {
+        case .appSwitcherButtonTapped:
+            return sendAppSwitcherDoubleHome(state: &state)
+
         case let .buttonTapped(button):
             return sendCommandIfAllowed(
                 .buttonTap(button),
@@ -186,6 +189,32 @@ extension RemoteSessionFeature {
             targetPixels: metadata.pixelSize,
             orientation: metadata.orientation
         )?.point
+    }
+
+    /// Sends the target's double-home shortcut from the floating controls.
+    ///
+    /// The controller's own bottom-edge swipe still races iPadOS system
+    /// gestures even with edge deferral active, so the switcher stays
+    /// reachable as a button. The target treats two home-button taps
+    /// inside the double-click window as the app-switcher shortcut, so
+    /// the effect walks two ordinary button commands through the command
+    /// queue with a paced gap. Tapping again while a pair is running
+    /// replaces it.
+    private func sendAppSwitcherDoubleHome(
+        state: inout State
+    ) -> Effect<Action> {
+        guard state.acceptsInput else {
+            return .none
+        }
+        DeviceHubFeatureTrace.emit("app_switcher_double_home_started")
+        return .run { [clock] send in
+            await send(.buttonTapped(.home))
+            try await clock.sleep(
+                for: RemoteSessionFeature.appSwitcherHomeTapGap
+            )
+            await send(.buttonTapped(.home))
+        }
+        .cancellable(id: CancelID.appSwitcherGesture, cancelInFlight: true)
     }
 
     private func sendCommandIfAllowed(

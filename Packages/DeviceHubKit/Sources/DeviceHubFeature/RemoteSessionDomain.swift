@@ -12,6 +12,10 @@ public extension RemoteSessionFeature {
     struct State: Equatable {
         /// Touch contacts whose begin event was accepted by the current session.
         public var activeContactIDs: Set<UInt8>
+        /// Consecutive automatic reconnects completed without a delivered
+        /// frame, user action, or foreground return. Drives the exponential
+        /// backoff so a deterministic failure cannot hot-loop.
+        public var automaticReconnectAttempts: Int
         /// Device whose detail presentation is currently visible.
         public var detailsDeviceID: DeviceID?
         /// Platform work the app shell must complete outside the reducer.
@@ -37,6 +41,7 @@ public extension RemoteSessionFeature {
 
         public init(
             activeContactIDs: Set<UInt8> = [],
+            automaticReconnectAttempts: Int = 0,
             detailsDeviceID: DeviceID? = nil,
             externalRemediation: ExternalRemediationRequest? = nil,
             isLoadingRoster: Bool = false,
@@ -50,6 +55,7 @@ public extension RemoteSessionFeature {
             session: ActiveRemoteSession? = nil
         ) {
             self.activeContactIDs = activeContactIDs
+            self.automaticReconnectAttempts = automaticReconnectAttempts
             self.detailsDeviceID = detailsDeviceID
             self.externalRemediation = externalRemediation
             self.isLoadingRoster = isLoadingRoster
@@ -120,6 +126,7 @@ public extension RemoteSessionFeature {
     @CasePathable
     enum Action {
         case appLifecycleChanged(DeviceHubAppLifecycle)
+        case appSwitcherButtonTapped
         case availabilityObservationFinished
         case availabilitySnapshotReceived([DeviceSummary])
         case buttonTapped(DeviceButton)
@@ -132,6 +139,10 @@ public extension RemoteSessionFeature {
             attemptID: UUID,
             sessionID: DeviceSessionID,
             sequenceNumber: UInt64
+        )
+        case connectAttemptTimedOut(
+            attemptID: UUID,
+            deviceID: DeviceID
         )
         case connectionResponse(
             attemptID: UUID,
@@ -163,6 +174,7 @@ public extension RemoteSessionFeature {
             Result<[DeviceSummary], DeviceHubError>
         )
         case pairing(PresentationAction<PairingFeature.Action>)
+        case reconnectScheduled(attemptID: UUID)
         case remediationButtonTapped
         case remediationDismissed
         case retrySelectedDevice

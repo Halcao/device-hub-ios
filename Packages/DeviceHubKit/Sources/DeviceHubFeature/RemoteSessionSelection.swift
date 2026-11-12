@@ -28,6 +28,7 @@ extension RemoteSessionFeature {
             state.selectedDeviceID = deviceID
             state.isViewingStopped = false
             state.pairing = nil
+            state.automaticReconnectAttempts = 0
             return beginSessionIfPossible(
                 state: &state,
                 device: device
@@ -50,6 +51,24 @@ extension RemoteSessionFeature {
             guard let device = state.selectedDevice else {
                 return .none
             }
+            state.automaticReconnectAttempts = 0
+            return beginSessionIfPossible(
+                state: &state,
+                device: device
+            )
+
+        case let .reconnectScheduled(attemptID):
+            guard state.lifecycle == .active,
+                  !state.isViewingStopped,
+                  let device = state.selectedDevice,
+                  device.pairingState == .paired,
+                  device.reachability == .reachable,
+                  state.session?.attemptID == attemptID,
+                  state.session?.isTerminal == true
+            else {
+                return .none
+            }
+            state.automaticReconnectAttempts += 1
             return beginSessionIfPossible(
                 state: &state,
                 device: device
@@ -60,6 +79,7 @@ extension RemoteSessionFeature {
                 return .none
             }
             state.isViewingStopped = false
+            state.automaticReconnectAttempts = 0
             return beginSessionIfPossible(
                 state: &state,
                 device: device
@@ -115,10 +135,16 @@ extension RemoteSessionFeature {
             device: device,
             evaluatedAt: date.now
         )
-        let connect = connectEffect(
-            attemptID: attemptID,
-            deviceID: device.id,
-            cancelID: .connect
+        let connect = Effect<Action>.merge(
+            connectEffect(
+                attemptID: attemptID,
+                deviceID: device.id,
+                cancelID: .connect
+            ),
+            connectTimeoutEffect(
+                attemptID: attemptID,
+                deviceID: device.id
+            )
         )
         guard let previousSession else {
             return .concatenate(
@@ -150,7 +176,7 @@ extension RemoteSessionFeature {
 
         guard !state.isViewingStopped,
               state.selectedDeviceID != previousSelection
-              || state.session == nil,
+              || state.session?.isTerminal != false,
               let selectedDevice = state.selectedDevice
         else {
             if state.selectedDeviceID == nil {

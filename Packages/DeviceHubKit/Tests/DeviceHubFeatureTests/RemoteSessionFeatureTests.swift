@@ -283,6 +283,8 @@ struct RemoteSessionFeatureTests {
             )
         ) {
             RemoteSessionFeature()
+        } withDependencies: {
+            $0.continuousClock = TestClock()
         }
         let sessionID = try #require(current.sessionID)
         let errors: [DeviceHubError] = [
@@ -307,6 +309,11 @@ struct RemoteSessionFeatureTests {
                 $0.remediation = DeviceHubRemediation(error: error)
                 $0.session?.connectionError = error
             }
+        }
+
+        await store.send(.appLifecycleChanged(.background)) {
+            $0.lifecycle = .background
+            $0.session = nil
         }
     }
 

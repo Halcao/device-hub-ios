@@ -75,7 +75,7 @@ public struct ExternalRemediationRequest: Equatable, Identifiable, Sendable {
 ///
 /// The reducer assigns sequence numbers before crossing an asynchronous
 /// boundary, so task scheduling can never reorder strict touch or key edges.
-struct PendingRemoteCommand: Equatable, Sendable {
+struct PendingRemoteCommand: Equatable {
     let attemptID: UUID
     let authorization: ScreenMetadata
     let command: DeviceCommand
@@ -129,6 +129,23 @@ public struct ActiveRemoteSession: Equatable, Sendable {
         sessionID = nil
         nextCommandSequenceNumber = 0
         pendingCommands = []
+    }
+
+    /// Whether this attempt can no longer make progress on its own.
+    ///
+    /// Terminal attempts are retained only to present the failure while a
+    /// replacement attempt or an explicit user action decides what follows.
+    public var isTerminal: Bool {
+        if connectionError != nil {
+            return true
+        }
+        guard let remoteState else {
+            return false
+        }
+        if case .ended = remoteState.connection {
+            return true
+        }
+        return false
     }
 
     /// Time-derived confidence in canonical transport media metadata.

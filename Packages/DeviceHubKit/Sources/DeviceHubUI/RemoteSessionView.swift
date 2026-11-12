@@ -94,6 +94,9 @@ struct RemoteSessionView: View {
             isViewingStopped: store.isViewingStopped,
             presentation: store.sessionPresentation,
             remediation: store.remediation,
+            appSwitcherButtonTapped: appSwitcherButtonTapped,
+            homeButtonTapped: { hardwareButtonTapped(.home) },
+            lockButtonTapped: { hardwareButtonTapped(.lock) },
             pairButtonTapped: pairButtonTapped,
             remediationButtonTapped: remediationButtonTapped,
             remediationDismissed: remediationDismissed,
@@ -174,6 +177,11 @@ struct RemoteSessionView: View {
         if oldValue, !newValue {
             isKeyboardPresented = false
         }
+    }
+
+    private func appSwitcherButtonTapped() {
+        DeviceHubHaptics.hardwareControl()
+        store.send(.appSwitcherButtonTapped)
     }
 
     private func deviceSelected(_ deviceID: DeviceID) {

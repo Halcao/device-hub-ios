@@ -6,10 +6,13 @@ import Foundation
 extension RemoteSessionFeature {
     func cancelSessionEffects() -> Effect<Action> {
         .merge(
+            .cancel(id: CancelID.appSwitcherGesture),
             .cancel(id: CancelID.commands),
             .cancel(id: CancelID.connect),
+            .cancel(id: CancelID.connectTimeout),
             .cancel(id: CancelID.frames),
-            .cancel(id: CancelID.lifecycle)
+            .cancel(id: CancelID.lifecycle),
+            .cancel(id: CancelID.reconnect)
         )
     }
 
@@ -59,6 +62,55 @@ extension RemoteSessionFeature {
             }
         }
         .cancellable(id: cancelID, cancelInFlight: true)
+    }
+
+    /// Bounds one in-flight connection attempt so a handshake that stalls in
+    /// the transport surfaces as an automatic failure and is retried.
+    func connectTimeoutEffect(
+        attemptID: UUID,
+        deviceID: DeviceID
+    ) -> Effect<Action> {
+        .run { [clock] send in
+            try? await clock.sleep(
+                for: RemoteSessionFeature.connectAttemptTimeout
+            )
+            guard !Task.isCancelled else {
+                return
+            }
+            await send(
+                .connectAttemptTimedOut(
+                    attemptID: attemptID,
+                    deviceID: deviceID
+                )
+            )
+        }
+        .cancellable(id: CancelID.connectTimeout, cancelInFlight: true)
+    }
+
+    /// Retries the selected device after an automatically retryable
+    /// failure, after a delay that grows with consecutive frame-less
+    /// automatic reconnects.
+    func scheduleReconnectEffect(
+        attemptID: UUID,
+        delay: Duration
+    ) -> Effect<Action> {
+        .run { [clock] send in
+            try? await clock.sleep(for: delay)
+            guard !Task.isCancelled else {
+                return
+            }
+            await send(.reconnectScheduled(attemptID: attemptID))
+        }
+        .cancellable(id: CancelID.reconnect, cancelInFlight: true)
+    }
+
+    /// Abandons coordinator ownership of an attempt that never established,
+    /// so a late transport response cannot resuscitate it.
+    func abandonConnectAttemptEffect(attemptID: UUID) -> Effect<Action> {
+        let sessionCoordinator = sessionCoordinator
+        return .run { _ in
+            _ = await sessionCoordinator.close(attemptID: attemptID)
+        }
     }
 
     /// Revokes the current frame authorization before normal command effects
@@ -117,8 +169,13 @@ extension RemoteSessionFeature {
         state: inout State
     ) -> Effect<Action> {
         state.activeContactIDs.removeAll()
+        // A revoked authorization must also stop any synthetic gesture in
+        // flight, or its remaining steps would fire as no-ops.
+        let cancelGesture = Effect<Action>.cancel(
+            id: CancelID.appSwitcherGesture
+        )
         guard var session = state.session else {
-            return .none
+            return cancelGesture
         }
         session.pendingCommands.removeAll(keepingCapacity: false)
         state.session = session
@@ -126,11 +183,14 @@ extension RemoteSessionFeature {
             let authorization = session.frame?.metadata,
             session.revokedInputMetadata != authorization
         else {
-            return .none
+            return cancelGesture
         }
         session.revokedInputMetadata = authorization
         state.session = session
-        return releaseAllInputEffect(session: session)
+        return .concatenate(
+            cancelGesture,
+            releaseAllInputEffect(session: session)
+        )
     }
 
     func observe(
