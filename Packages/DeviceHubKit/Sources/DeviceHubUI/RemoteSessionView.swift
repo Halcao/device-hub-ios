@@ -179,7 +179,6 @@ struct RemoteSessionView: View {
     }
 
     private func appSwitcherButtonTapped() {
-        DeviceHubHaptics.hardwareControl()
         store.send(.appSwitcherButtonTapped)
     }
 
@@ -188,7 +187,6 @@ struct RemoteSessionView: View {
     }
 
     private func hardwareButtonTapped(_ button: DeviceButton) {
-        DeviceHubHaptics.hardwareControl()
         store.send(.buttonTapped(button))
     }
 
@@ -217,7 +215,6 @@ struct RemoteSessionView: View {
     }
 
     private func rotateButtonTapped() {
-        DeviceHubHaptics.hardwareControl()
         store.send(.rotateRightButtonTapped)
     }
 
@@ -279,16 +276,3 @@ private extension View {
 enum RemoteCanvasColor {
     static let value = Color(red: 0.025, green: 0.027, blue: 0.035)
 }
-
-@MainActor
-enum DeviceHubHaptics {
-    static func hardwareControl() {
-        #if os(iOS)
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
-        #endif
-    }
-}
-
-#if os(iOS)
-    import UIKit
-#endif
