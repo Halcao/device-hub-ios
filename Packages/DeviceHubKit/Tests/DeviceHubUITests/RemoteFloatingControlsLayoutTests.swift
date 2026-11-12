@@ -105,43 +105,42 @@ struct RemoteFloatingControlsLayoutTests {
         )
     }
 
-    @Test("Drags near the middle settle exactly onto it")
-    func dragsNearTheMiddleSettleExactlyOntoIt() {
-        let snapped = RemoteFloatingControlsLayout.settlingCenter(
+    @Test("Dropped heights are preserved, including beside the middle")
+    func droppedHeightsArePreservedBesideTheMiddle() {
+        let nearMiddle = RemoteFloatingControlsLayout.clampedCenter(
             rawCenter: CGPoint(x: 900, y: 315),
             canvasSize: canvas,
             clusterSize: cluster
         )
-        #expect(snapped == CGPoint(x: 900, y: 300))
+        #expect(nearMiddle == CGPoint(x: 900, y: 315))
 
-        let boundary = RemoteFloatingControlsLayout.settlingCenter(
-            rawCenter: CGPoint(x: 900, y: 300 + 44),
+        let exactlyMiddle = RemoteFloatingControlsLayout.clampedCenter(
+            rawCenter: CGPoint(x: 500, y: 300),
             canvasSize: canvas,
             clusterSize: cluster
         )
-        #expect(boundary.y == 300)
+        #expect(exactlyMiddle == CGPoint(x: 500, y: 300))
     }
 
-    @Test("Deliberately off-center placement stays where dropped")
-    func offCenterPlacementStaysWhereDropped() {
-        let dropped = RemoteFloatingControlsLayout.settlingCenter(
-            rawCenter: CGPoint(x: 300, y: 480),
+    @Test("A drop beside the middle parks beside the middle")
+    func dropBesideMiddleParksBesideMiddle() {
+        let fraction = RemoteFloatingControlsLayout.verticalFraction(
+            centerY: 315,
             canvasSize: canvas,
             clusterSize: cluster
         )
-        #expect(dropped == CGPoint(x: 300, y: 480))
-
-        let beyondBoundary = RemoteFloatingControlsLayout.settlingCenter(
-            rawCenter: CGPoint(x: 300, y: 300 + 45),
+        let parked = RemoteFloatingControlsLayout.center(
+            edge: .trailing,
+            verticalFraction: fraction,
             canvasSize: canvas,
             clusterSize: cluster
         )
-        #expect(beyondBoundary.y == 345)
+        #expect(parked == CGPoint(x: 958, y: 315))
     }
 
     @Test("Dragged centers clamp inside the canvas")
     func draggedCentersClampInsideTheCanvas() {
-        let clamped = RemoteFloatingControlsLayout.settlingCenter(
+        let clamped = RemoteFloatingControlsLayout.clampedCenter(
             rawCenter: CGPoint(x: -40, y: 900),
             canvasSize: canvas,
             clusterSize: cluster
@@ -161,12 +160,12 @@ struct RemoteFloatingControlsLayoutTests {
         // Width still fits the inset, so the edge wins; height does not.
         #expect(center == CGPoint(x: 58, y: 50))
 
-        let settled = RemoteFloatingControlsLayout.settlingCenter(
+        let clamped = RemoteFloatingControlsLayout.clampedCenter(
             rawCenter: CGPoint(x: 40, y: 80),
             canvasSize: tiny,
             clusterSize: cluster
         )
-        #expect(settled == CGPoint(x: 42, y: 50))
+        #expect(clamped == CGPoint(x: 42, y: 50))
 
         let fraction = RemoteFloatingControlsLayout.verticalFraction(
             centerY: 40,

@@ -10,8 +10,6 @@ enum RemoteFloatingControlsEdge: String, CaseIterable, Equatable {
 enum RemoteFloatingControlsLayout {
     /// Space between the cluster and the edge it rests on.
     static let edgeInset: CGFloat = 12
-    /// How close to the vertical middle a drag must pass to snap there.
-    static let magnetDistance: CGFloat = 44
 
     /// Resting center for a stored edge and vertical fraction.
     static func center(
@@ -70,39 +68,25 @@ enum RemoteFloatingControlsLayout {
         centerX * 2 < canvasWidth ? .leading : .trailing
     }
 
-    /// Whether a dragged center is close enough to the vertical middle
-    /// to snap there.
-    static func isWithinMagnet(
-        centerY: CGFloat,
-        canvasHeight: CGFloat
-    ) -> Bool {
-        abs(centerY - canvasHeight / 2) <= magnetDistance
-    }
-
     /// Clamps a dragged center to keep the cluster fully inside the
-    /// canvas and pins it to the vertical middle while the magnet holds,
-    /// so deliberately off-center placement stays exactly where dropped.
-    static func settlingCenter(
+    /// canvas. The dropped height is preserved exactly: the cluster only
+    /// ever snaps to an edge, never to a preferred height.
+    static func clampedCenter(
         rawCenter: CGPoint,
         canvasSize: CGSize,
         clusterSize: CGSize
     ) -> CGPoint {
-        let clamped = clampedY(
-            rawCenter.y,
-            canvasSize: canvasSize,
-            clusterSize: clusterSize
-        )
-        let pinned = isWithinMagnet(
-            centerY: clamped,
-            canvasHeight: canvasSize.height
-        )
-        return CGPoint(
+        CGPoint(
             x: clampedX(
                 rawCenter.x,
                 canvasSize: canvasSize,
                 clusterSize: clusterSize
             ),
-            y: pinned ? canvasSize.height / 2 : clamped
+            y: clampedY(
+                rawCenter.y,
+                canvasSize: canvasSize,
+                clusterSize: clusterSize
+            )
         )
     }
 
@@ -141,11 +125,9 @@ enum RemoteFloatingControlsLayout {
 ///
 /// The controller's own edge swipes can still collide with iPadOS system
 /// gestures even while the bottom-edge deferral is active, so the most
-/// common target gestures stay one tap away instead. The cluster sits on
-/// the canvas border, which is letterbox margin while mirroring, and can
-/// be repositioned: hold to drag it anywhere along the edges, where it
-/// magnetically snaps to the vertical middle but also parks at any
-/// deliberately chosen height. The placement survives relaunches.
+/// common target gestures stay one tap away instead. Hold the cluster to
+/// drag it: on release it springs to the nearest edge at the exact height
+/// it was dropped, and the placement survives relaunches.
 struct RemoteFloatingControls: View {
     let acceptsInput: Bool
     let homeButtonTapped: () -> Void
@@ -160,7 +142,7 @@ struct RemoteFloatingControls: View {
     @State private var liveCenter: CGPoint?
     @State private var dragAnchor: CGPoint?
     @State private var isDragging = false
-    @State private var isPinnedToMiddle = false
+    @State private var snapTargetEdge: RemoteFloatingControlsEdge?
     @State private var clusterSize = CGSize.zero
 
     var body: some View {
@@ -174,7 +156,10 @@ struct RemoteFloatingControls: View {
                 } action: {
                     clusterSize = $0
                 }
-                .gesture(dragGesture(canvasSize: proxy.size))
+                // Buttons win plain container gestures, so the
+                // hold-to-drag sequence must outrank them. It still fails
+                // fast on a quick tap, which keeps the buttons responsive.
+                .highPriorityGesture(dragGesture(canvasSize: proxy.size))
         }
     }
 
@@ -190,11 +175,10 @@ struct RemoteFloatingControls: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 6)
-        .background(
-            .black.opacity(isDragging ? 0.75 : 0.6),
-            in: .capsule
-        )
-        .glassEffect(.regular, in: .capsule)
+        // No opaque fill behind the glass: a background layered inside
+        // the effect hides the refraction and highlights that make it
+        // read as Liquid Glass.
+        .glassEffect(.regular.interactive(), in: .capsule)
         .opacity(acceptsInput || isDragging ? 1 : 0.4)
         .scaleEffect(isDragging ? 1.08 : 1)
         .animation(
@@ -214,6 +198,7 @@ struct RemoteFloatingControls: View {
             Image(systemName: systemImage)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
                 .frame(width: 42, height: 42)
                 .contentShape(.rect)
         }
@@ -223,7 +208,9 @@ struct RemoteFloatingControls: View {
     }
 
     private func dragGesture(canvasSize: CGSize) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.35)
+        // A generous maximumDistance keeps a slightly drifting finger
+        // from aborting the hold before the drag can start.
+        LongPressGesture(minimumDuration: 0.35, maximumDistance: 50)
             .sequenced(before: DragGesture())
             .onChanged { value in
                 switch value {
@@ -262,9 +249,12 @@ struct RemoteFloatingControls: View {
         }
         let anchor = restingCenter(canvasSize: canvasSize)
         isDragging = true
-        isPinnedToMiddle = false
         dragAnchor = anchor
         liveCenter = anchor
+        snapTargetEdge = RemoteFloatingControlsLayout.nearestEdge(
+            centerX: anchor.x,
+            canvasWidth: canvasSize.width
+        )
         DeviceHubHaptics.hardwareControl()
     }
 
@@ -275,7 +265,7 @@ struct RemoteFloatingControls: View {
         guard let dragAnchor else {
             return
         }
-        let settled = RemoteFloatingControlsLayout.settlingCenter(
+        let center = RemoteFloatingControlsLayout.clampedCenter(
             rawCenter: CGPoint(
                 x: dragAnchor.x + translation.width,
                 y: dragAnchor.y + translation.height
@@ -283,24 +273,31 @@ struct RemoteFloatingControls: View {
             canvasSize: canvasSize,
             clusterSize: clusterSize
         )
-        let pinned = settled.y == canvasSize.height / 2
-        if pinned != isPinnedToMiddle {
-            isPinnedToMiddle = pinned
+        let targetEdge = RemoteFloatingControlsLayout.nearestEdge(
+            centerX: center.x,
+            canvasWidth: canvasSize.width
+        )
+        if targetEdge != snapTargetEdge {
+            // One tick each time the release target flips to the other
+            // edge: crossing the snap line is what sticking feels like.
+            snapTargetEdge = targetEdge
             DeviceHubHaptics.hardwareControl()
         }
-        liveCenter = settled
+        liveCenter = center
     }
 
     private func endDrag(canvasSize: CGSize) {
         guard isDragging, let center = liveCenter else {
             isDragging = false
             dragAnchor = nil
+            snapTargetEdge = nil
             return
         }
-        let edge = RemoteFloatingControlsLayout.nearestEdge(
-            centerX: center.x,
-            canvasWidth: canvasSize.width
-        )
+        let edge =
+            snapTargetEdge ?? RemoteFloatingControlsLayout.nearestEdge(
+                centerX: center.x,
+                canvasWidth: canvasSize.width
+            )
         let fraction = RemoteFloatingControlsLayout.verticalFraction(
             centerY: center.y,
             canvasSize: canvasSize,
@@ -312,8 +309,8 @@ struct RemoteFloatingControls: View {
             liveCenter = nil
         }
         isDragging = false
-        isPinnedToMiddle = false
         dragAnchor = nil
+        snapTargetEdge = nil
         DeviceHubHaptics.hardwareControl()
     }
 }

@@ -423,7 +423,7 @@ private struct RemoteStatusBadge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.black.opacity(0.72), in: .capsule)
+            .glassEffect(.regular, in: .capsule)
             .accessibilityElement(children: .combine)
     }
 }
