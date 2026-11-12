@@ -9,13 +9,13 @@ private let cluster = CGSize(width: 60, height: 200)
 struct RemoteFloatingControlsLayoutTests {
     @Test("Resting centers hug their edge and span the travel track")
     func restingCentersFollowEdgeAndFraction() {
-        let leadingMiddle = RemoteFloatingControlsLayout.center(
+        let leadingMiddle = RemoteFloatingControlsLayout.restingCenter(
             edge: .leading,
             verticalFraction: 0.5,
             canvasSize: canvas,
             clusterSize: cluster
         )
-        let trailingMiddle = RemoteFloatingControlsLayout.center(
+        let trailingMiddle = RemoteFloatingControlsLayout.restingCenter(
             edge: .trailing,
             verticalFraction: 0.5,
             canvasSize: canvas,
@@ -27,13 +27,13 @@ struct RemoteFloatingControlsLayoutTests {
         #expect(leadingMiddle.y == 300)
         #expect(trailingMiddle.y == 300)
 
-        let top = RemoteFloatingControlsLayout.center(
+        let top = RemoteFloatingControlsLayout.restingCenter(
             edge: .trailing,
             verticalFraction: 0,
             canvasSize: canvas,
             clusterSize: cluster
         )
-        let bottom = RemoteFloatingControlsLayout.center(
+        let bottom = RemoteFloatingControlsLayout.restingCenter(
             edge: .trailing,
             verticalFraction: 1,
             canvasSize: canvas,
@@ -69,13 +69,14 @@ struct RemoteFloatingControlsLayoutTests {
     @Test("Fraction and center round-trip across the track")
     func fractionAndCenterRoundTrip() {
         for fraction in stride(from: 0.0, through: 1.0, by: 0.25) {
-            let center = RemoteFloatingControlsLayout.centerY(
-                fraction: fraction,
+            let center = RemoteFloatingControlsLayout.restingCenter(
+                edge: .trailing,
+                verticalFraction: fraction,
                 canvasSize: canvas,
                 clusterSize: cluster
             )
             let restored = RemoteFloatingControlsLayout.verticalFraction(
-                centerY: center,
+                centerY: center.y,
                 canvasSize: canvas,
                 clusterSize: cluster
             )
@@ -107,15 +108,15 @@ struct RemoteFloatingControlsLayoutTests {
 
     @Test("Dropped heights are preserved, including beside the middle")
     func droppedHeightsArePreservedBesideTheMiddle() {
-        let nearMiddle = RemoteFloatingControlsLayout.clampedCenter(
-            rawCenter: CGPoint(x: 900, y: 315),
+        let nearMiddle = RemoteFloatingControlsLayout.clamp(
+            CGPoint(x: 900, y: 315),
             canvasSize: canvas,
             clusterSize: cluster
         )
         #expect(nearMiddle == CGPoint(x: 900, y: 315))
 
-        let exactlyMiddle = RemoteFloatingControlsLayout.clampedCenter(
-            rawCenter: CGPoint(x: 500, y: 300),
+        let exactlyMiddle = RemoteFloatingControlsLayout.clamp(
+            CGPoint(x: 500, y: 300),
             canvasSize: canvas,
             clusterSize: cluster
         )
@@ -129,7 +130,7 @@ struct RemoteFloatingControlsLayoutTests {
             canvasSize: canvas,
             clusterSize: cluster
         )
-        let parked = RemoteFloatingControlsLayout.center(
+        let parked = RemoteFloatingControlsLayout.restingCenter(
             edge: .trailing,
             verticalFraction: fraction,
             canvasSize: canvas,
@@ -140,50 +141,18 @@ struct RemoteFloatingControlsLayoutTests {
 
     @Test("Dragged centers clamp inside the canvas")
     func draggedCentersClampInsideTheCanvas() {
-        let clamped = RemoteFloatingControlsLayout.clampedCenter(
-            rawCenter: CGPoint(x: -40, y: 900),
+        let clamped = RemoteFloatingControlsLayout.clamp(
+            CGPoint(x: -40, y: 900),
             canvasSize: canvas,
             clusterSize: cluster
         )
         #expect(clamped == CGPoint(x: 42, y: 500))
     }
 
-    @Test("Taps route to the control whose third they land in")
-    func tapsRouteToControlThirds() {
-        // Icon centers for a 170 pt cluster with the current padding
-        // and spacing all sit inside their own thirds.
-        #expect(
-            RemoteFloatingControlsLayout.slot(centerY: 0, clusterHeight: 170)
-                == .home
-        )
-        #expect(
-            RemoteFloatingControlsLayout.slot(centerY: 33, clusterHeight: 170)
-                == .home
-        )
-        #expect(
-            RemoteFloatingControlsLayout.slot(centerY: 85, clusterHeight: 170)
-                == .appSwitcher
-        )
-        #expect(
-            RemoteFloatingControlsLayout.slot(centerY: 137, clusterHeight: 170)
-                == .lock
-        )
-        #expect(
-            RemoteFloatingControlsLayout.slot(
-                centerY: 169,
-                clusterHeight: 170
-            ) == .lock
-        )
-        #expect(
-            RemoteFloatingControlsLayout.slot(centerY: 85, clusterHeight: 0)
-                == .appSwitcher
-        )
-    }
-
     @Test("A canvas smaller than the cluster falls back to its middle")
     func canvasSmallerThanClusterFallsBackToMiddle() {
         let tiny = CGSize(width: 100, height: 100)
-        let center = RemoteFloatingControlsLayout.center(
+        let center = RemoteFloatingControlsLayout.restingCenter(
             edge: .trailing,
             verticalFraction: 0.2,
             canvasSize: tiny,
@@ -192,8 +161,8 @@ struct RemoteFloatingControlsLayoutTests {
         // Width still fits the inset, so the edge wins; height does not.
         #expect(center == CGPoint(x: 58, y: 50))
 
-        let clamped = RemoteFloatingControlsLayout.clampedCenter(
-            rawCenter: CGPoint(x: 40, y: 80),
+        let clamped = RemoteFloatingControlsLayout.clamp(
+            CGPoint(x: 40, y: 80),
             canvasSize: tiny,
             clusterSize: cluster
         )

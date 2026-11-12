@@ -162,10 +162,14 @@ struct RemoteCanvas: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(.rect)
+        .accessibilityElement()
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
         // Edge gestures still race iPadOS system gestures even with bottom
         // deferral, so the common target gestures stay available as pinned
-        // buttons on the canvas border. The cluster positions itself inside
-        // the canvas so it can be dragged and re-anchored.
+        // buttons on the canvas border. Attached last so nothing wraps the
+        // cluster: it owns every touch inside its capsule.
         .overlay {
             RemoteFloatingControls(
                 acceptsInput: acceptsInput,
@@ -174,10 +178,6 @@ struct RemoteCanvas: View {
                 lockButtonTapped: lockButtonTapped
             )
         }
-        .contentShape(.rect)
-        .accessibilityElement()
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(accessibilityHint)
     }
 
     private func acceptsInputChanged(
